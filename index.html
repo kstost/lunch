@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<title>Lunch Roulette</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<style>
+  /* ─────────── Global ─────────── */
+  :root {
+    --max-wheel: 360px;  /* 데스크톱 최대 크기 */
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    font-family: 'Pretendard', sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 16px;
+    min-height: 100vh;
+    margin: 0;
+    padding-top: clamp(16px, 4vmin, 32px);
+    background: #f5f5f7;
+    -webkit-tap-highlight-color: transparent;  /* 터치 하이라이트 제거 */
+    touch-action: manipulation;                /* 더블탭 지연 제거 */
+  }
+
+  /* ─────────── Wheel ─────────── */
+  #container { position: relative; }
+
+  /* 80vmin = 뷰포트의 짧은 변 80% → 모바일에서도 꽉 차게, 데스크톱에서는 최대 360px */
+  #wheelSvg {
+    width: min(80vmin, var(--max-wheel));
+    height: min(80vmin, var(--max-wheel));
+    transform-origin: 50% 50%;
+    user-select: none;
+    touch-action: none;
+  }
+
+  /* Pointer (핀) : 크기를 휠 비율에 맞춰 JS에서 동적 적용 */
+  #pointer {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+
+  /* 핀 기본 값 (데스크톱) */
+  .pointer-shape {
+    width: 0;
+    height: 0;
+    border-left: 14px solid transparent;
+    border-right: 14px solid transparent;
+    border-top: 28px solid #222;
+    display: block;
+  }
+
+  /* ─────────── Controls ─────────── */
+  #spinBtn {
+    padding: clamp(10px, 2.2vmin, 14px) clamp(28px, 6vmin, 40px);
+    font-size: clamp(0.9rem, 2.4vmin, 1rem);
+    background: #222;
+    color: #fff;
+    border: none;
+    border-radius: 9999px;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+  #result {
+    margin-top: 16px;
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: #222;
+    min-height: 1.4rem;
+    text-align: center;
+  }
+
+  /* ───── 메뉴 추가 UI ───── */
+  #addContainer {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding: 0 16px;
+    width: 100%;
+    max-width: var(--max-wheel);
+  }
+  #menuInput {
+    flex: 1 1 auto;
+    padding: 12px 14px;
+    font-size: 1rem;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    outline: none;
+  }
+  #addBtn {
+    flex: 0 0 auto;
+    padding: 12px 20px;
+    font-size: 0.95rem;
+    background: #222;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  /* ───── Typography on wheel ───── */
+  text {
+    font-size: clamp(10px, 2.8vmin, 14px);
+    fill: #fff;
+    pointer-events: auto;
+    user-select: none;
+  }
+
+  /* ─────────── Popup ─────────── */
+  #popup {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    display: none;               /* flex when active */
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 16px;
+    backdrop-filter: blur(2px);
+  }
+  .popup-inner {
+    background: #fff;
+    border-radius: 20px;
+    padding: 28px 32px;
+    text-align: center;
+    font-size: clamp(1.2rem, 5vmin, 1.6rem);
+    line-height: 1.4;
+    position: relative;
+    animation: popIn 0.4s ease;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+  }
+  @keyframes popIn {
+    0% { transform: scale(0.5); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  #closePopup {
+    margin-top: 20px;
+    padding: 12px 24px;
+    font-size: 1rem;
+    background: #222;
+    color: #fff;
+    border: none;
+    border-radius: 9999px;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+</style>
+</head>
+<body>
+  <!-- 메뉴 추가 인터페이스 -->
+  <div id="addContainer">
+    <input id="menuInput" type="text" placeholder="메뉴 이름 입력" />
+    <button id="addBtn">추가</button>
+  </div>
+
+  <!-- 룰렛 -->
+  <div id="container">
+    <svg id="wheelSvg" viewBox="-180 -180 360 360"></svg>
+    <div id="pointer"><span class="pointer-shape"></span></div>
+  </div>
+  <button id="spinBtn">돌려!</button>
+  <div id="result"></div>
+
+  <!-- Popup -->
+  <div id="popup">
+    <div class="popup-inner">
+      <p id="popupText"></p>
+      <button id="closePopup">확인</button>
+    </div>
+  </div>
+
+  <!-- Libraries -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/gsap.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  <script>
+    /***********************
+     * localStorage 키      *
+     **********************/
+    const STORAGE_KEY = 'lunchRouletteMenus';
+
+    /***********************
+     * 데이터 & 유틸       *
+     **********************/
+    function loadMenus() {
+      try {
+        const stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
+        if (Array.isArray(stored) && stored.length) return stored;
+      } catch (_) {}
+      return ['햄버거','라면','김밥','샐러드','피자','초밥','떡볶이','치킨'];
+    }
+    function saveMenus() { localStorage.setItem(STORAGE_KEY, JSON.stringify(menus)); }
+
+    let menus = loadMenus();
+
+    const baseColors   = ['#f94144','#f3722c','#f8961e','#f9c74f','#90be6d','#43aa8b','#577590','#764ba2'];
+    const wheelSvg     = document.getElementById('wheelSvg');
+    const resultEl     = document.getElementById('result');
+    const pointerEl    = document.getElementById('pointer');
+
+    const popupEl      = document.getElementById('popup');
+    const popupTextEl  = document.getElementById('popupText');
+    const closePopupEl = document.getElementById('closePopup');
+
+    const radius       = 160;                     // viewBox단위 고정
+    const pointerAngle = 270;                    // SVG 12시 방향
+
+    // ───────────────────── 색상 순환
+    const getColor = i => baseColors[i % baseColors.length];
+    const sliceAngle = () => 360 / menus.length;
+
+    /***********************
+     *  핀 크기 동적 조정  *
+     **********************/
+    function resizePointer() {
+      const w = wheelSvg.getBoundingClientRect().width;   // px
+      const triW = w * 0.07;       // 7% 폭
+      const triH = triW * 2;       // 높이는 폭의 2배
+      const shape = pointerEl.firstElementChild;
+      shape.style.borderLeft  = `${triW}px solid transparent`;
+      shape.style.borderRight = `${triW}px solid transparent`;
+      shape.style.borderTop   = `${triH}px solid #222`;
+      pointerEl.style.top = `-${triH * 0.22}px`;          // 꼭짓점 살짝 내리기
+    }
+    window.addEventListener('resize', resizePointer);
+
+    /***********************
+     * 휠 그리기           *
+     **********************/
+    function drawWheel() {
+      wheelSvg.innerHTML = '';
+      const angle = sliceAngle();
+
+      menus.forEach((label, i) => {
+        const start = i * angle;
+        const end   = start + angle;
+        const largeArc = angle > 180 ? 1 : 0;
+
+        const startRad = (Math.PI / 180) * start;
+        const endRad   = (Math.PI / 180) * end;
+
+        const x1 = radius * Math.cos(startRad);
+        const y1 = radius * Math.sin(startRad);
+        const x2 = radius * Math.cos(endRad);
+        const y2 = radius * Math.sin(endRad);
+
+        const pathData = [
+          'M', 0, 0,
+          'L', x1, y1,
+          'A', radius, radius, 0, largeArc, 1, x2, y2,
+          'Z',
+        ].join(' ');
+
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', pathData);
+        path.setAttribute('fill', getColor(i));
+        path.style.cursor = 'pointer';
+
+        const removeHandler = (e) => { e.stopPropagation(); removeMenuAt(i); };
+        path.addEventListener('click', removeHandler);
+        path.addEventListener('touchstart', removeHandler, { passive: true });
+        wheelSvg.appendChild(path);
+
+        // 라벨
+        const midAngle = start + angle / 2;
+        const midRad   = (Math.PI / 180) * midAngle;
+        const labelR   = radius * 0.65;
+        const lx = labelR * Math.cos(midRad);
+        const ly = labelR * Math.sin(midRad);
+
+        const textEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        textEl.setAttribute('x', lx);
+        textEl.setAttribute('y', ly);
+        textEl.setAttribute('text-anchor', 'middle');
+        textEl.setAttribute('dominant-baseline', 'middle');
+        textEl.textContent = label;
+        textEl.style.cursor = 'pointer';
+
+        const removeTextHandler = (e) => { e.stopPropagation(); removeMenuAt(i); };
+        textEl.addEventListener('click', removeTextHandler);
+        textEl.addEventListener('touchstart', removeTextHandler, { passive: true });
+        wheelSvg.appendChild(textEl);
+      });
+
+      resizePointer();
+    }
+
+    drawWheel();
+
+    /***********************
+     *  Confetti & Popup   *
+     **********************/
+    function fireConfetti() {
+      const duration = 2 * 1000;
+      const animationEnd = Date.now() + duration;
+      const defaults = { startVelocity: 35, spread: 360, ticks: 60, zIndex: 1001 };
+      const interval = setInterval(() => {
+        const timeLeft = animationEnd - Date.now();
+        if (timeLeft <= 0) {
+          clearInterval(interval);
+          return;
+        }
+        const particleCount = 40 * (timeLeft / duration);
+        confetti(Object.assign({}, defaults, {
+          particleCount,
+          origin: { x: Math.random(), y: Math.random() * 0.3 }
+        }));
+      }, 250);
+    }
+
+    function showPopup(menu) {
+      popupTextEl.innerHTML = `오늘의 점심은 <br><strong>${menu}</strong> 🎉🎊`;
+      popupEl.style.display = 'flex';
+    }
+    closePopupEl.addEventListener('click', () => {
+      popupEl.style.display = 'none';
+    });
+
+    /***********************
+     * 스핀 로직           *
+     **********************/
+    let isSpinning = false;
+
+    function spin() {
+      if (isSpinning || menus.length === 0) return;
+      isSpinning = true;
+      resultEl.textContent = '';
+
+      const extraSpins   = 5 + Math.floor(Math.random() * 3);  // 5~7바퀴
+      const randomOffset = Math.random() * 360;                // 0~360°
+      const rotation     = extraSpins * 360 + randomOffset;
+
+      gsap.to(wheelSvg, {
+        rotation,
+        duration: 6,
+        ease: 'power4.out',
+        onComplete: () => {
+          const current = (gsap.getProperty(wheelSvg, 'rotation') % 360 + 360) % 360;
+          const angle   = sliceAngle();
+          const normalized  = (pointerAngle - current + 360) % 360;
+          const pickedIndex = Math.floor(normalized / angle);
+
+          // 팡팡! Confetti & Popup
+          fireConfetti();
+          showPopup(menus[pickedIndex]);
+
+          // 텍스트 결과는 보조적으로 유지
+          resultEl.textContent = `오늘의 점심: ${menus[pickedIndex]}`;
+          isSpinning = false;
+        },
+      });
+    }
+    document.getElementById('spinBtn').addEventListener('click', spin);
+
+    /***********************
+     * 메뉴 추가 / 제거    *
+     **********************/
+    const inputEl = document.getElementById('menuInput');
+
+    function addMenu() {
+      const value = inputEl.value.trim();
+      if (!value) return;
+      menus.push(value);
+      inputEl.value = '';
+      saveMenus();
+      drawWheel();
+    }
+    function removeMenuAt(index) {
+      if (isSpinning) return;
+      menus.splice(index, 1);
+      saveMenus();
+      if (menus.length === 0) resultEl.textContent = '';
+      drawWheel();
+    }
+
+    document.getElementById('addBtn').addEventListener('click', addMenu);
+    inputEl.addEventListener('keydown', (e) => {
+      if (e.isComposing) return;
+      if (e.key === 'Enter') addMenu();
+    });
+  </script>
+</body>
+</html>
